@@ -42,12 +42,25 @@ export type ModelRequest = {
   instructions: string;
   input: readonly RunItem[];
   tools: readonly ModelToolDefinition[];
+  signal?: AbortSignal;
 };
 
 export type ModelResponse = {
   output: readonly ModelOutput[];
 };
 
+export type ModelStreamEvent =
+  | { type: 'text_delta'; delta: string }
+  | {
+      type: 'tool_call_delta';
+      index: number;
+      callId?: string;
+      name?: string;
+      argumentsDelta?: string;
+    }
+  | { type: 'completed'; response: ModelResponse };
+
 export interface Model {
   getResponse(request: ModelRequest): Promise<ModelResponse>;
+  getResponseStream?(request: ModelRequest): AsyncGenerator<ModelStreamEvent>;
 }

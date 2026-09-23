@@ -6,6 +6,7 @@ import {
   type Model,
   type ModelRequest,
   type ModelResponse,
+  type RunEvent,
 } from '../src/index.ts';
 
 const calculator = tool({
@@ -15,6 +16,7 @@ const calculator = tool({
     left: z.number(),
     right: z.number(),
   }),
+  timeoutMs: 1_000,
   execute: ({ left, right }) => ({ result: left + right }),
 });
 
@@ -55,8 +57,12 @@ const agent = new Agent({
   tools: [calculator],
 });
 
-const result = await run(agent, '请计算 16 + 6。');
+const events: RunEvent[] = [];
+const result = await run(agent, '请计算 16 + 6。', {
+  onEvent: (event) => events.push(event),
+});
 
 console.log('最终答案:', result.finalOutput);
 console.log('模型调用轮数:', result.turns);
+console.log('运行事件:', JSON.stringify(events, null, 2));
 console.log('完整历史:', JSON.stringify(result.history, null, 2));

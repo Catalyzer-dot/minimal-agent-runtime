@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "demo": "node --experimental-strip-types examples/calculator.ts",
+    "demo:deepseek": "node --env-file-if-exists=.env --experimental-strip-types examples/deepseek-calculator.ts",
+    "demo:deepseek:stream": "node --env-file-if-exists=.env --experimental-strip-types examples/deepseek-streaming.ts",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

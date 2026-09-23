@@ -1,11 +1,15 @@
 export { Agent } from './agent.ts';
 export type { AgentOptions } from './agent.ts';
+export { DeepSeekModel } from './deepseek-model.ts';
+export type { DeepSeekModelOptions } from './deepseek-model.ts';
+export type { RunEvent, RunEventHandler } from './events.ts';
 export type {
   AssistantMessage,
   Model,
   ModelOutput,
   ModelRequest,
   ModelResponse,
+  ModelStreamEvent,
   ModelToolDefinition,
   RunItem,
   ToolCall,
@@ -20,5 +24,10 @@ export {
   run,
 } from './runner.ts';
 export type { RunOptions } from './runner.ts';
-export { tool } from './tool.ts';
-export type { FunctionTool, ToolOptions } from './tool.ts';
+export { invokeFunctionTool, tool, ToolTimeoutError } from './tool.ts';
+export type {
+  FunctionTool,
+  ToolExecutionContext,
+  ToolOptions,
+  ToolTimeoutBehavior,
+} from './tool.ts';
