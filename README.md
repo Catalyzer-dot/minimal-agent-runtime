@@ -99,22 +99,25 @@ DeepSeek tool_calls       → 内部 ToolCall(callId, name, arguments)
 
 ## 流式运行
 
-`DeepSeekModel` 同时实现了 `getResponseStream()`。Runner 提供 `runStream()`，它是一个
-`AsyncGenerator`，可以观察模型文本和 Tool Call 参数的增量：
+`DeepSeekModel` 同时实现了 `getResponseStream()`。Runner 提供 `stream()`，它返回一个
+`StreamedRunResult`，可以同时观察模型文本和 Tool Call 参数的增量，并等待最终结果：
 
 ```ts
-const stream = new Runner().runStream(agent, '请计算 16 + 6。');
+const stream = new Runner().stream(agent, '请计算 16 + 6。');
 for await (const event of stream) {
   if (event.type === 'text_delta') process.stdout.write(event.delta);
   if (event.type === 'tool_call_delta') {
     console.log('Tool 参数仍在累积中:', event.argumentsDelta ?? '');
   }
 }
+
+const finalResult = await stream.completed;
+console.log(finalResult.finalOutput);
 ```
 
 流式事件只负责观测。Runner 必须等 Provider 发出 `completed`，得到完整的
 `ToolCall.arguments` 后，才会执行 Tool；因此不会因为某个参数片段到达就产生副作用。
-如果 Model 没有实现流式接口，`runStream()` 会退化为一次非流式调用并发出一个完整文本事件。
+如果 Model 没有实现流式接口，底层 `runStream()` 会退化为一次非流式调用并发出一个完整文本事件。
 
 ## 推荐阅读顺序
 

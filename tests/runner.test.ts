@@ -100,6 +100,28 @@ test('runStream emits deltas and executes tools only after completion', async ()
   assert.deepEqual(events.map((event) => event.type), ['tool_call_delta', 'tool_started', 'tool_completed', 'text_delta']);
 });
 
+test('stream exposes queued events and a completed RunResult', async () => {
+  const model: Model = {
+    async getResponse(): Promise<ModelResponse> {
+      return { output: [{ type: 'assistant_message', content: 'done' }] };
+    },
+    async *getResponseStream() {
+      yield { type: 'text_delta', delta: 'done' };
+      yield { type: 'completed', response: { output: [{ type: 'assistant_message', content: 'done' }] } };
+    },
+  };
+  const stream = new Runner().stream(
+    new Agent({ name: 'Completed Agent', instructions: 'Answer.', model }),
+    'Start.',
+  );
+
+  const result = await stream.completed;
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.equal(result.finalOutput, 'done');
+  assert.deepEqual(events, [{ type: 'text_delta', turn: 1, delta: 'done' }]);
+});
+
 test('returns tool validation errors to the model', async () => {
   const events: RunEvent[] = [];
   const model: Model = {

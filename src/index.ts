@@ -16,7 +16,7 @@ export type {
   ToolResult,
   UserMessage,
 } from './model.ts';
-export { RunResult } from './result.ts';
+export { RunResult, StreamedRunResult } from './result.ts';
 export {
   MaxTurnsExceededError,
   ModelBehaviorError,

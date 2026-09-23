@@ -6,7 +6,7 @@ import type {
   RunItem,
   ToolCall,
 } from './model.ts';
-import { RunResult } from './result.ts';
+import { RunResult, StreamedRunResult } from './result.ts';
 import { invokeFunctionTool, ToolTimeoutError } from './tool.ts';
 
 export type RunOptions = {
@@ -149,6 +149,14 @@ export class Runner {
     }
 
     throw new MaxTurnsExceededError(`Max turns (${maxTurns}) exceeded.`);
+  }
+
+  stream(
+    agent: Agent,
+    input: string,
+    options: RunOptions = {},
+  ): StreamedRunResult {
+    return new StreamedRunResult(this.runStream(agent, input, options));
   }
 
   /**

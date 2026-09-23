@@ -21,22 +21,13 @@ const agent = new Agent({
 });
 
 const input = process.argv.slice(2).join(' ') || '请计算 16 + 6。';
-const stream = new Runner().runStream(agent, input);
+const stream = new Runner().stream(agent, input);
 
 console.log('用户输入:', input);
 console.log('开始流式运行：');
 
 let printedText = false;
-while (true) {
-  const next = await stream.next();
-  if (next.done) {
-    if (printedText) process.stdout.write('\n');
-    console.log('\n最终答案:', next.value.finalOutput);
-    console.log('模型调用轮数:', next.value.turns);
-    break;
-  }
-
-  const event = next.value;
+for await (const event of stream) {
   switch (event.type) {
     case 'text_delta':
       process.stdout.write(event.delta);
@@ -71,3 +62,8 @@ while (true) {
       break;
   }
 }
+
+const result = await stream.completed;
+if (printedText) process.stdout.write('\n');
+console.log('\n最终答案:', result.finalOutput);
+console.log('模型调用轮数:', result.turns);
