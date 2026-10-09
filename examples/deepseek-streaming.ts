@@ -1,6 +1,25 @@
 import { z } from 'zod';
 import { Agent, DeepSeekModel, Runner, tool } from '../src/index.ts';
 
+const sleep = (ms: number, signal: AbortSignal): Promise<void> => {
+  signal.throwIfAborted();
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+};
+
 const calculator = tool({
   name: 'calculator',
   description: 'Calculate the sum of two numbers.',
@@ -9,7 +28,11 @@ const calculator = tool({
     right: z.number(),
   }),
   timeoutMs: 3_000,
-  execute: ({ left, right }) => ({ result: left + right }),
+  execute: async ({ left, right }, {signal}) => {
+    await sleep(4000, signal);
+    return { result: left + right }
+  }
+  ,
 });
 
 const agent = new Agent({

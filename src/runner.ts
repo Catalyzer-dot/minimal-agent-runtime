@@ -11,12 +11,21 @@ import { invokeFunctionTool, ToolTimeoutError } from './tool.ts';
 
 export type RunOptions = {
   maxTurns?: number;
+  limits?: RunLimits;
   signal?: AbortSignal;
   onEvent?: RunEventHandler;
 };
 
+export type RunLimits = {
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxRunDurationMs?: number;
+  maxRepeatedToolCalls?: number;
+};
+
 export class MaxTurnsExceededError extends Error {}
 export class ModelBehaviorError extends Error {}
+export class RunLimitExceededError extends Error {}
 
 export class Runner {
   readonly defaultMaxTurns: number;
@@ -30,12 +39,22 @@ export class Runner {
     input: string,
     options: RunOptions = {},
   ): Promise<RunResult> {
-    const maxTurns = options.maxTurns ?? this.defaultMaxTurns;
+    const runId = createRunId();
+    const startedAt = Date.now();
+    const limits = options.limits ?? {};
+    const maxTurns = options.maxTurns ?? limits.maxTurns ?? this.defaultMaxTurns;
+    const toolCallCounts = new Map<string, number>();
+    let toolCallCount = 0;
     const history: RunItem[] = [{ type: 'user_message', content: input }];
     const rawResponses: ModelResponse[] = [];
+    const emit = (event: import('./events.ts').RunEvent) => options.onEvent?.(event);
+    emit({ type: 'run_started', runId });
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       options.signal?.throwIfAborted();
+      enforceRunDuration(startedAt, limits.maxRunDurationMs, runId, emit);
+      emit({ type: 'model_started', runId, turn });
+      const modelStartedAt = Date.now();
 
       const response = await agent.model.getResponse({
         instructions: agent.instructions,
@@ -48,6 +67,7 @@ export class Runner {
         })),
         signal: options.signal,
       });
+      emit({ type: 'model_completed', runId, turn, durationMs: Date.now() - modelStartedAt });
 
       rawResponses.push(response);
       history.push(...response.output);
@@ -64,15 +84,23 @@ export class Runner {
           );
         }
 
-        return new RunResult({
+        const result = new RunResult({
           finalOutput: finalMessage.content,
           history,
           rawResponses,
           turns: turn,
         });
+        emit({ type: 'run_completed', runId, turns: turn, durationMs: Date.now() - startedAt });
+        return result;
       }
 
       for (const toolCall of toolCalls) {
+        toolCallCount += 1;
+        enforceToolCallLimit(toolCallCount, limits.maxToolCalls, runId, emit);
+        const signature = `${toolCall.name}:${toolCall.arguments}`;
+        const repeatedCount = (toolCallCounts.get(signature) ?? 0) + 1;
+        toolCallCounts.set(signature, repeatedCount);
+        enforceRepeatedToolLimit(repeatedCount, limits.maxRepeatedToolCalls, runId, emit);
         const selectedTool = agent.tools.find(
           (candidate) => candidate.name === toolCall.name,
         );
@@ -84,11 +112,13 @@ export class Runner {
         }
 
         const eventBase = {
+          runId,
           turn,
           callId: toolCall.callId,
           toolName: toolCall.name,
         };
         options.onEvent?.({ type: 'tool_started', ...eventBase });
+        const toolStartedAt = Date.now();
 
         try {
           const output = await invokeFunctionTool(
@@ -107,6 +137,7 @@ export class Runner {
             type: 'tool_completed',
             ...eventBase,
             output,
+            durationMs: Date.now() - toolStartedAt,
           });
         } catch (error) {
           if (options.signal?.aborted) {
@@ -168,15 +199,26 @@ export class Runner {
     input: string,
     options: RunOptions = {},
   ): AsyncGenerator<import('./events.ts').RunEvent, RunResult, void> {
-    const maxTurns = options.maxTurns ?? this.defaultMaxTurns;
+    const runId = createRunId();
+    const startedAt = Date.now();
+    const limits = options.limits ?? {};
+    const maxTurns = options.maxTurns ?? limits.maxTurns ?? this.defaultMaxTurns;
+    const toolCallCounts = new Map<string, number>();
+    let toolCallCount = 0;
     const history: RunItem[] = [{ type: 'user_message', content: input }];
     const rawResponses: ModelResponse[] = [];
     const emit = (event: import('./events.ts').RunEvent) => {
       options.onEvent?.(event);
     };
+    emit({ type: 'run_started', runId });
+    yield { type: 'run_started', runId };
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       options.signal?.throwIfAborted();
+      enforceRunDuration(startedAt, limits.maxRunDurationMs, runId, emit);
+      const modelStartedAt = Date.now();
+      const modelStarted = { type: 'model_started' as const, runId, turn };
+      emit(modelStarted); yield modelStarted;
       const request = {
         instructions: agent.instructions,
         input: [...history],
@@ -191,8 +233,8 @@ export class Runner {
           if (event.type === 'completed') response = event.response;
           else {
             const runEvent = event.type === 'text_delta'
-              ? { type: 'text_delta' as const, turn, delta: event.delta }
-              : { type: 'tool_call_delta' as const, turn, index: event.index, callId: event.callId, name: event.name, argumentsDelta: event.argumentsDelta };
+              ? { type: 'text_delta' as const, runId, turn, delta: event.delta }
+              : { type: 'tool_call_delta' as const, runId, turn, index: event.index, callId: event.callId, name: event.name, argumentsDelta: event.argumentsDelta };
             emit(runEvent);
             yield runEvent;
           }
@@ -201,11 +243,13 @@ export class Runner {
         response = await agent.model.getResponse(request);
         const message = findLastMessage(response.output);
         if (message) {
-          const runEvent = { type: 'text_delta' as const, turn, delta: message.content };
+          const runEvent = { type: 'text_delta' as const, runId, turn, delta: message.content };
           emit(runEvent);
           yield runEvent;
         }
       }
+      const modelCompleted = { type: 'model_completed' as const, runId, turn, durationMs: Date.now() - modelStartedAt };
+      emit(modelCompleted); yield modelCompleted;
       if (!response) throw new ModelBehaviorError('Streaming model ended without a completed response.');
       rawResponses.push(response);
       history.push(...response.output);
@@ -213,18 +257,28 @@ export class Runner {
       if (toolCalls.length === 0) {
         const finalMessage = findLastMessage(response.output);
         if (!finalMessage) throw new ModelBehaviorError('The model returned neither a message nor a tool call.');
-        return new RunResult({ finalOutput: finalMessage.content, history, rawResponses, turns: turn });
+        const result = new RunResult({ finalOutput: finalMessage.content, history, rawResponses, turns: turn });
+        const completed = { type: 'run_completed' as const, runId, turns: turn, durationMs: Date.now() - startedAt };
+        emit(completed); yield completed;
+        return result;
       }
       for (const toolCall of toolCalls) {
+        toolCallCount += 1;
+        enforceToolCallLimit(toolCallCount, limits.maxToolCalls, runId, emit);
+        const signature = `${toolCall.name}:${toolCall.arguments}`;
+        const repeatedCount = (toolCallCounts.get(signature) ?? 0) + 1;
+        toolCallCounts.set(signature, repeatedCount);
+        enforceRepeatedToolLimit(repeatedCount, limits.maxRepeatedToolCalls, runId, emit);
         const selectedTool = agent.tools.find((candidate) => candidate.name === toolCall.name);
         if (!selectedTool) throw new ModelBehaviorError(`Model requested unknown tool: ${toolCall.name}`);
-        const eventBase = { turn, callId: toolCall.callId, toolName: toolCall.name };
+        const eventBase = { runId, turn, callId: toolCall.callId, toolName: toolCall.name };
         const started = { type: 'tool_started' as const, ...eventBase };
+        const toolStartedAt = Date.now();
         emit(started); yield started;
         try {
           const output = await invokeFunctionTool(selectedTool, toolCall.arguments, options.signal);
           history.push({ type: 'tool_result', callId: toolCall.callId, name: toolCall.name, output, isError: false });
-          const completed = { type: 'tool_completed' as const, ...eventBase, output };
+          const completed = { type: 'tool_completed' as const, ...eventBase, output, durationMs: Date.now() - toolStartedAt };
           emit(completed); yield completed;
         } catch (error) {
           if (options.signal?.aborted) {
@@ -265,4 +319,44 @@ function findLastMessage(
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function createRunId(): string {
+  return `run_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function enforceRunDuration(
+  startedAt: number,
+  maxRunDurationMs: number | undefined,
+  runId: string,
+  emit: RunEventHandler,
+): void {
+  if (maxRunDurationMs === undefined || Date.now() - startedAt <= maxRunDurationMs) return;
+  const reason = `Run duration exceeded ${maxRunDurationMs}ms.`;
+  emit({ type: 'run_limit_exceeded', runId, reason });
+  throw new RunLimitExceededError(reason);
+}
+
+function enforceToolCallLimit(
+  count: number,
+  maxToolCalls: number | undefined,
+  runId: string,
+  emit: RunEventHandler,
+): void {
+  if (maxToolCalls === undefined || count <= maxToolCalls) return;
+  const reason = `Tool call limit (${maxToolCalls}) exceeded.`;
+  emit({ type: 'run_limit_exceeded', runId, reason });
+  throw new RunLimitExceededError(reason);
+}
+
+function enforceRepeatedToolLimit(
+  count: number,
+  maxRepeatedToolCalls: number | undefined,
+  runId: string,
+  emit: RunEventHandler,
+): void {
+  if (maxRepeatedToolCalls === undefined || count <= maxRepeatedToolCalls) return;
+  const reason = `Repeated identical tool call limit (${maxRepeatedToolCalls}) exceeded.`;
+  emit({ type: 'run_limit_exceeded', runId, reason });
+  throw new RunLimitExceededError(reason);
 }

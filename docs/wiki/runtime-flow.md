@@ -257,7 +257,21 @@ sequenceDiagram
 文本可以立即增量展示；Tool Call 的 name 和 arguments 必须在 Provider 层聚合完成，
 再由 Runner 进入和非流式相同的 Schema 校验、超时、取消和错误处理流程。
 
-## 10. 当前未实现
+## 10. 运行时监控与循环防护
+
+每次运行会生成 `runId`，并记录模型轮次、模型耗时、工具耗时和运行总时长。可配置：
+
+| 限制 | 作用 |
+|---|---|
+| `maxTurns` | 限制模型调用轮数 |
+| `maxToolCalls` | 限制一次 Run 的 Tool 总调用数 |
+| `maxRunDurationMs` | 限制一次 Run 的总时长 |
+| `maxRepeatedToolCalls` | 限制相同工具和相同参数的重复调用 |
+
+触发限制时，Runner 发出 `run_limit_exceeded` 并抛出 `RunLimitExceededError`。重复调用检测
+只能识别完全相同的调用；语义等价但 JSON 顺序不同的参数需要更完整的规范化策略。
+
+## 11. 当前未实现
 
 ```text
 Guardrails 与人工审批

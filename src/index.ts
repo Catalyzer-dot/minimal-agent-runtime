@@ -20,10 +20,11 @@ export { RunResult, StreamedRunResult } from './result.ts';
 export {
   MaxTurnsExceededError,
   ModelBehaviorError,
+  RunLimitExceededError,
   Runner,
   run,
 } from './runner.ts';
-export type { RunOptions } from './runner.ts';
+export type { RunLimits, RunOptions } from './runner.ts';
 export { invokeFunctionTool, tool, ToolTimeoutError } from './tool.ts';
 export type {
   FunctionTool,

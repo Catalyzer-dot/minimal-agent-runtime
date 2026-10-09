@@ -62,6 +62,26 @@ Runner 负责统一执行并处理策略：
 - `RunOptions.signal`：取消整个运行，并传递到正在执行的 Tool。
 - `RunOptions.onEvent`：接收 `tool_started`、`tool_completed`、`tool_failed`、`tool_timed_out` 和 `tool_cancelled`。
 
+Runner 还支持运行时预算和循环防护：
+
+```ts
+await run(agent, input, {
+  maxTurns: 10,
+  limits: {
+    maxToolCalls: 20,
+    maxRunDurationMs: 60_000,
+    maxRepeatedToolCalls: 3,
+  },
+});
+```
+
+其中 `maxRepeatedToolCalls` 根据 `toolName + arguments` 识别完全相同的重复调用，
+触发后抛出 `RunLimitExceededError` 并发出 `run_limit_exceeded`。这是运行时护栏，
+不能替代工具本身的幂等键、状态查询、补偿操作和人工接管。
+
+运行事件还包括 `run_started`、`model_started`、`model_completed`、`run_completed`，
+其中模型和工具完成事件带有 `durationMs`，可用于构建基础耗时和错误监控。
+
 `invokeFunctionTool()` 是底层执行机制，遇到超时总是抛出 `ToolTimeoutError`；超时策略由上层 Runner 应用。这种拆分用于展示“机制”和“策略”的边界。
 
 ## 接入真实 DeepSeek

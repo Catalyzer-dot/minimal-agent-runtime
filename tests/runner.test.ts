@@ -7,6 +7,7 @@ import {
   ModelBehaviorError,
   run,
   Runner,
+  RunLimitExceededError,
   tool,
   ToolTimeoutError,
   type Model,
@@ -70,9 +71,11 @@ test('executes a tool and gives its result back to the model', async () => {
     true,
   );
   assert.deepEqual(
-    events.map((event) => event.type),
+    events.filter((event) => event.type.startsWith('tool_')).map((event) => event.type),
     ['tool_started', 'tool_completed'],
   );
+  assert.equal(events[0]?.type, 'run_started');
+  assert.equal(events.at(-1)?.type, 'run_completed');
 });
 
 test('runStream emits deltas and executes tools only after completion', async () => {
@@ -97,7 +100,10 @@ test('runStream emits deltas and executes tools only after completion', async ()
   const stream = runner.runStream(new Agent({ name: 'Stream Agent', instructions: 'Use echo.', model, tools: [tool({ name: 'echo', description: 'Echo.', parameters: z.object({ message: z.string() }), execute: ({ message }) => { calls += 1; return message; } })] }), 'Start.');
   for await (const event of stream) events.push(event);
   assert.equal(calls, 1);
-  assert.deepEqual(events.map((event) => event.type), ['tool_call_delta', 'tool_started', 'tool_completed', 'text_delta']);
+  assert.deepEqual(
+    events.filter((event) => ['tool_call_delta', 'tool_started', 'tool_completed', 'text_delta'].includes(event.type)).map((event) => event.type),
+    ['tool_call_delta', 'tool_started', 'tool_completed', 'text_delta'],
+  );
 });
 
 test('stream exposes queued events and a completed RunResult', async () => {
@@ -119,7 +125,7 @@ test('stream exposes queued events and a completed RunResult', async () => {
   const events = [];
   for await (const event of stream) events.push(event);
   assert.equal(result.finalOutput, 'done');
-  assert.deepEqual(events, [{ type: 'text_delta', turn: 1, delta: 'done' }]);
+  assert.equal(events.filter((event) => event.type === 'text_delta')[0]?.delta, 'done');
 });
 
 test('returns tool validation errors to the model', async () => {
@@ -173,7 +179,7 @@ test('returns tool validation errors to the model', async () => {
     true,
   );
   assert.deepEqual(
-    events.map((event) => event.type),
+    events.filter((event) => event.type.startsWith('tool_')).map((event) => event.type),
     ['tool_started', 'tool_failed'],
   );
 });
@@ -273,7 +279,7 @@ test('returns a timeout to the model when behavior is error_as_result', async ()
     true,
   );
   assert.deepEqual(
-    events.map((event) => event.type),
+    events.filter((event) => event.type.startsWith('tool_')).map((event) => event.type),
     ['tool_started', 'tool_timed_out'],
   );
 });
@@ -353,9 +359,52 @@ test('cancels a running tool when the run signal is aborted', async () => {
   await assert.rejects(runPromise, /Cancelled by user/);
   assert.equal(receivedAbort, true);
   assert.deepEqual(
-    events.map((event) => event.type),
+    events.filter((event) => event.type.startsWith('tool_')).map((event) => event.type),
     ['tool_started', 'tool_cancelled'],
   );
+});
+
+test('stops repeated tool calls before an infinite loop grows', async () => {
+  const events: RunEvent[] = [];
+  const loopingModel: Model = {
+    async getResponse(): Promise<ModelResponse> {
+      return {
+        output: [{ type: 'tool_call', callId: 'same-call', name: 'echo', arguments: '{"message":"again"}' }],
+      };
+    },
+  };
+
+  await assert.rejects(
+    run(
+      new Agent({ name: 'Loop Guard Agent', instructions: 'Stop loops.', model: loopingModel, tools: [echoTool] }),
+      'Start.',
+      { maxTurns: 10, limits: { maxRepeatedToolCalls: 2 }, onEvent: (event) => events.push(event) },
+    ),
+    RunLimitExceededError,
+  );
+  const limit = events.find((event) => event.type === 'run_limit_exceeded');
+  assert.ok(limit && limit.type === 'run_limit_exceeded');
+  assert.match(limit.reason, /Repeated identical tool call/);
+});
+
+test('stops when the total tool call budget is exhausted', async () => {
+  let callId = 0;
+  const model: Model = {
+    async getResponse(): Promise<ModelResponse> {
+      callId += 1;
+      return { output: [{ type: 'tool_call', callId: `call_${callId}`, name: 'echo', arguments: JSON.stringify({ message: String(callId) }) }] };
+    },
+  };
+
+  await assert.rejects(
+    run(
+      new Agent({ name: 'Budget Agent', instructions: 'Use echo.', model, tools: [echoTool] }),
+      'Start.',
+      { limits: { maxToolCalls: 2 } },
+    ),
+    /Tool call limit \(2\) exceeded/,
+  );
+  assert.equal(callId, 3);
 });
 
 function createToolCallingModel(
